@@ -1,0 +1,7 @@
+/zepto
+/profile
+/tmp
+*.har
+*.log
+cookie.txt
+auth.json
