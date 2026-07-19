@@ -9,7 +9,7 @@ quick and works anywhere a single Go binary runs.
 ## Install
 
 ```bash
-go install github.com/ankityadav/zepto@latest
+go install github.com/4nkitd/zepto@latest
 ```
 
 Or build from source:

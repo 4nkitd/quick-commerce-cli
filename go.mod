@@ -1,3 +1,3 @@
-module github.com/ankityadav/zepto
+module github.com/4nkitd/zepto
 
 go 1.25.6
