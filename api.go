@@ -122,17 +122,17 @@ func toInt(v any) int {
 }
 
 type Order struct {
-	Code            string `json:"code"`
-	Status          string `json:"status"`
-	FormattedStatus string `json:"formattedStatus"`
-	ItemCount       int    `json:"itemQuantityCount"`
-	GrandTotal      int    `json:"grandTotalAmount"`
-	RefundAmount    int    `json:"totalRefundAmount"`
-	PlacedTime      string `json:"placedTime"`
-	ID              string `json:"id"`
-	StatusTitle     string `json:"statusTitle"`
-	ArrivalMins     int    `json:"totalArrivalTimeInMinutes"`
-	ArrivedTime     string `json:"arrivedTime"`
+	Code            string          `json:"code"`
+	Status          string          `json:"status"`
+	FormattedStatus string          `json:"formattedStatus"`
+	ItemCount       int             `json:"itemQuantityCount"`
+	GrandTotal      int             `json:"grandTotalAmount"`
+	RefundAmount    int             `json:"totalRefundAmount"`
+	PlacedTime      string          `json:"placedTime"`
+	ID              string          `json:"id"`
+	StatusTitle     json.RawMessage `json:"statusTitle,omitempty"`
+	ArrivalMins     int             `json:"totalArrivalTimeInMinutes"`
+	ArrivedTime     string          `json:"arrivedTime"`
 	Products        []struct {
 		Name  string `json:"name"`
 		Count int    `json:"count"`
