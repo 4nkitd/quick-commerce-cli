@@ -3,18 +3,26 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 type Product struct {
-	Name        string
-	Brand       string
-	MRP         int
-	Selling     int
-	Discounted  int
-	OutOfStock  bool
-	VariantID   string
-	StoreProdID string
-	Unit        string
+	Name        string `json:"name"`
+	Brand       string `json:"brand"`
+	MRP         int    `json:"mrp"`
+	Selling     int    `json:"selling"`
+	Discounted  int    `json:"discounted"`
+	OutOfStock  bool   `json:"out_of_stock"`
+	VariantID   string `json:"variant_id"`
+	StoreProdID string `json:"store_prod_id"`
+	Unit        string `json:"unit"`
+}
+
+func (p Product) effectivePrice() int {
+	if p.Discounted > 0 && (p.Selling == 0 || p.Discounted < p.Selling) {
+		return p.Discounted
+	}
+	return p.Selling
 }
 
 type searchResp struct {
@@ -137,18 +145,18 @@ type ordersResp struct {
 
 // Tracking is the live view of a single order.
 type Tracking struct {
-	Code      string
-	Status    string
-	EtaMins   int
-	ItemCount int
-	Total     int
-	Address   string
-	Stages    []TrackStage
+	Code      string       `json:"code"`
+	Status    string       `json:"status"`
+	EtaMins   int          `json:"eta_mins,omitempty"`
+	ItemCount int          `json:"item_count"`
+	Total     int          `json:"total_paise"`
+	Address   string       `json:"address,omitempty"`
+	Stages    []TrackStage `json:"stages,omitempty"`
 }
 
 type TrackStage struct {
-	Title  string
-	Status string
+	Title  string `json:"title"`
+	Status string `json:"status"`
 }
 
 // Track fetches live status for an order by its UUID.
@@ -203,18 +211,50 @@ func str(v any) string {
 }
 
 func (c *Client) Orders(size int) ([]Order, error) {
-	b, err := c.do("GET", fmt.Sprintf("/api/v2/order/?page=0&size=%d", size), nil)
-	if err != nil {
-		return nil, err
+	var all []Order
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 1; page <= 50; page++ {
+		path := fmt.Sprintf("/api/v2/order/?page_number=%d", page)
+		if cursor != "" {
+			path += "&last_order_created_on=" + url.QueryEscape(cursor)
+		}
+		b, err := c.do("GET", path, nil)
+		if err != nil {
+			return nil, err
+		}
+		var or struct {
+			Orders         []Order `json:"orders"`
+			EndOfList      bool    `json:"endOfList"`
+			NextPageParams struct {
+				LastOrderCreatedOn string `json:"lastOrderCreatedOn"`
+			} `json:"nextPageParams"`
+		}
+		if err := json.Unmarshal(b, &or); err != nil {
+			return nil, err
+		}
+		added := 0
+		for _, o := range or.Orders {
+			key := o.ID
+			if key == "" {
+				key = o.Code
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, o)
+			added++
+		}
+		if size > 0 && len(all) >= size {
+			return all[:size], nil
+		}
+		if or.EndOfList || added == 0 || or.NextPageParams.LastOrderCreatedOn == "" {
+			break
+		}
+		cursor = or.NextPageParams.LastOrderCreatedOn
 	}
-	var or ordersResp
-	if err := json.Unmarshal(b, &or); err != nil {
-		return nil, err
-	}
-	if size > 0 && len(or.Orders) > size {
-		or.Orders = or.Orders[:size]
-	}
-	return or.Orders, nil
+	return all, nil
 }
 
 type CartLine struct {
@@ -236,6 +276,9 @@ type CartBill struct {
 }
 
 func (c *Client) CartSync(items []CartLine) (*CartBill, error) {
+	if c.s.AddressID == "" {
+		return nil, fmt.Errorf("cart sync disabled until an explicit delivery address is selected; address selection is not implemented yet")
+	}
 	products := []map[string]any{}
 	productsV2 := []map[string]any{}
 	for _, it := range items {
@@ -279,7 +322,7 @@ func (c *Client) CartSync(items []CartLine) (*CartBill, error) {
 		"isLayoutRequired":          len(items) > 0,
 		"locationToAddressDistance": 1,
 		"sessionMeta":               map[string]any{"clearUnserviceableProductsWidget": false},
-		"userAddressId":             "ad5222cb-d14c-451d-9316-f35173dda799",
+		"userAddressId":             c.s.AddressID,
 		"hasAds":                    true,
 	}
 	raw, _ := json.Marshal(body)

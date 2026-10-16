@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,73 +11,164 @@ import (
 	"time"
 )
 
-const banner = `  ▸ groceries delivered in ~10 minutes, from your terminal.
+var version = "v0.2.0"
+
+const helpText = `Quick Commerce CLI (qc)
+
+Usage: qc [--json] <zepto|blinkit> <command>
+
+Both providers:
+  login --phone <number> [--otp-source stdin|imsg]
+  auth status           Verify saved login with a read-only provider request
+  whoami                Show local session metadata, not a live auth check
+  search <query>        Products, live prices, pack size and stock
+  orders [n|--all]      Order history
+  order <id-or-code>    Detailed order & bill breakdown
+  spend [--md] [--out]  Lifetime & category spend analytics
+
+Cross-platform commands:
+  qc compare <query>                    Compare live prices across Zepto & Blinkit
+  qc spend [--md] [--out <file>]        Combined spend & category analytics
+  qc providers                          Implemented provider capabilities as JSON
+  qc version                            Print CLI version
+
+Zepto-only commands:
+  track <code> [--watch] Order tracking
+  wallet                 Wallet balance
+  import-session         Legacy Copy-as-cURL import from stdin
+
+Login requires agent-browser + Lightpanda. imsg is optional and macOS-only.
+Checkout, cart sync, support and refunds are disabled in this milestone.
+JSON output (--json) is supported on all read, auth and analytics commands.
 `
 
-const cmdList = `Commands:
-  zepto login            Connect your Zepto account
-  zepto search <query>   Find products — live prices, pack size & stock
-  zepto cart             Add items, change qty, see your bill
-  zepto checkout         Place your order (COD, UPI)
-  zepto orders [n]       Your order history
-  zepto order <code>     Details of one order
-  zepto track <code>     Live tracking — status, ETA, per-item progress
-  zepto wallet           Your wallet balance
-  zepto whoami           Show which account you're using
-`
-
-const loginHelp = `Getting started:
-  1. Open https://www.zepto.com in your browser — log in, set your delivery address.
-  2. DevTools → Network tab → filter "bff-gateway"
-  3. Right-click any request → Copy → Copy as cURL
-  4. Run: zepto login   → paste the cURL → press Ctrl-D
-`
-
-func printBanner(loggedIn bool) {
-	if loggedIn {
-		fmt.Print(banner)
-		fmt.Print(cmdList)
-	} else {
-		fmt.Println("zepto — order groceries from your terminal")
-		fmt.Print(banner)
-		fmt.Print(loginHelp)
-	}
+func printBanner(_ bool) {
+	fmt.Print(helpText)
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		_, loggedIn := loadSession()
-		printBanner(loggedIn == nil)
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "--json" {
+		jsonOutput = true
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		printBanner(false)
 		return
 	}
-	switch os.Args[1] {
-	case "login":
+	if args[0] == "--version" || args[0] == "-v" || args[0] == "version" {
+		if jsonOutput {
+			json.NewEncoder(os.Stdout).Encode(map[string]string{"name": "qc", "version": version})
+			return
+		}
+		fmt.Printf("qc version %s\n", version)
+		return
+	}
+	if args[0] == "providers" {
+		if len(args) != 1 {
+			fail(fmt.Errorf("usage: qc providers"))
+		}
+		json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"zepto":   map[string]any{"auth": "browser_otp", "read": []string{"search", "orders", "order", "track", "wallet", "spend", "compare"}, "checkout": false, "support": false, "refunds": false},
+			"blinkit": map[string]any{"auth": "browser_otp", "read": []string{"search", "orders", "order", "spend", "compare"}, "checkout": false, "support": false, "refunds": false},
+		})
+		return
+	}
+	if args[0] == "spend" {
+		cmdSpend("all", args[1:])
+		return
+	}
+	if args[0] == "compare" || args[0] == "cmp" {
+		cmdCompare(args[1:])
+		return
+	}
+	if p, err := parseProvider(args[0]); err == nil {
+		activeProvider = p
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		printBanner(false)
+		return
+	}
+	if args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		printBanner(false)
+		return
+	}
+	if args[0] == "login" {
+		if err := login(activeProvider, args[1:]); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if args[0] == "auth" {
+		if len(args) < 2 || args[1] != "status" {
+			fail(fmt.Errorf("usage: qc %s auth status", activeProvider))
+		}
+		if err := authStatus(activeProvider, args[2:]); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if args[0] == "whoami" {
+		if len(args) != 1 {
+			fail(fmt.Errorf("usage: qc %s whoami", activeProvider))
+		}
+		cmdWhoami()
+		return
+	}
+	if args[0] == "spend" {
+		cmdSpend(string(activeProvider), args[1:])
+		return
+	}
+	if args[0] == "compare" || args[0] == "cmp" {
+		cmdCompare(args[1:])
+		return
+	}
+	if args[0] == "checkout" || args[0] == "support" || args[0] == "refund" || args[0] == "refunds" || args[0] == "cart" {
+		fail(fmt.Errorf("%s is not available in this milestone; no provider action was taken", args[0]))
+	}
+	if activeProvider == Blinkit {
+		switch args[0] {
+		case "search", "s":
+			cmdBlinkitSearch(args[1:])
+			return
+		case "orders", "o":
+			cmdBlinkitOrders(args[1:])
+			return
+		case "order":
+			cmdBlinkitOrder(args[1:])
+			return
+		default:
+			fail(fmt.Errorf("Blinkit %s is not implemented; use login, auth status, whoami, search, orders, order or spend", args[0]))
+		}
+	}
+	if jsonOutput && args[0] == "import-session" {
+		fail(fmt.Errorf("JSON output is not implemented for %s", args[0]))
+	}
+	switch args[0] {
+	case "import-session":
 		cmdLogin()
 	case "search", "s":
-		cmdSearch(os.Args[2:])
+		cmdSearch(args[1:])
 	case "orders", "o":
-		cmdOrders(os.Args[2:])
+		cmdOrders(args[1:])
 	case "order":
-		cmdOrder(os.Args[2:])
+		cmdOrder(args[1:])
 	case "track", "t":
-		cmdTrack(os.Args[2:])
+		cmdTrack(args[1:])
 	case "wallet", "w":
 		cmdWallet()
-	case "cart":
-		cmdCart(os.Args[2:], client())
-	case "whoami":
-		cmdWhoami()
-	case "-h", "--help", "help":
-		_, loggedIn := loadSession()
-		printBanner(loggedIn == nil)
 	default:
-		fmt.Fprintf(os.Stderr, "unknown command %q — try %q\n", os.Args[1], "zepto --help")
-		os.Exit(1)
+		fail(fmt.Errorf("unknown command %q; try qc --help", args[0]))
 	}
 }
 
 func fail(err error) {
-	fmt.Fprintln(os.Stderr, "error:", err)
+	if jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"error": map[string]string{"code": "command_failed", "message": err.Error()}})
+	} else {
+		fmt.Fprintln(os.Stderr, "error:", err)
+	}
 	os.Exit(1)
 }
 
@@ -85,8 +177,16 @@ func rupees(paise int) string {
 }
 
 func cmdLogin() {
+	unlock, err := authLock(Zepto)
+	if err != nil {
+		fail(err)
+	}
+	defer unlock()
 	fmt.Fprintln(os.Stderr, "Paste your Zepto request (Copy as cURL), then press Ctrl-D:")
-	data, _ := io.ReadAll(os.Stdin)
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, 1024*1024+1))
+	if err != nil || len(data) > 1024*1024 {
+		fail(fmt.Errorf("cannot read session input, or input exceeds 1 MiB"))
+	}
 	s, err := parseCurl(string(data))
 	if err != nil {
 		fail(err)
@@ -94,7 +194,7 @@ func cmdLogin() {
 	if err := saveSession(s); err != nil {
 		fail(err)
 	}
-	fmt.Println("session saved. try: zepto search milk")
+	fmt.Println("session imported, not verified. Run: qc zepto auth status")
 }
 
 func client() *Client {
@@ -107,13 +207,17 @@ func client() *Client {
 
 func cmdSearch(args []string) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("usage: zepto search <query>"))
+		fail(fmt.Errorf("usage: qc zepto search <query>"))
 	}
 	q := strings.Join(args, " ")
 	c := client()
 	prods, total, err := c.Search(q)
 	if err != nil {
 		fail(err)
+	}
+	if jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"provider": activeProvider, "products": prods, "total": total, "currency": "INR", "amount_unit": "paise"})
+		return
 	}
 	if len(prods) == 0 {
 		fmt.Printf("no products found for %q\n", q)
@@ -146,8 +250,17 @@ func printSearchTable(prods []Product, total int, query string) {
 
 func cmdOrders(args []string) {
 	n := 10
+	if len(args) > 1 {
+		fail(fmt.Errorf("usage: qc zepto orders [1-500|--all]"))
+	}
 	if len(args) > 0 {
-		if v, err := strconv.Atoi(args[0]); err == nil {
+		if args[0] == "--all" {
+			n = 0
+		} else {
+			v, err := strconv.Atoi(args[0])
+			if err != nil || v < 1 || v > 500 {
+				fail(fmt.Errorf("order count must be between 1 and 500"))
+			}
 			n = v
 		}
 	}
@@ -155,6 +268,10 @@ func cmdOrders(args []string) {
 	orders, err := c.Orders(n)
 	if err != nil {
 		fail(err)
+	}
+	if jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"provider": activeProvider, "orders": orders, "currency": "INR", "amount_unit": "paise"})
+		return
 	}
 	if len(orders) == 0 {
 		fmt.Println("no orders yet")
@@ -170,16 +287,20 @@ func cmdOrders(args []string) {
 
 func cmdOrder(args []string) {
 	if len(args) == 0 {
-		fail(fmt.Errorf("usage: zepto order <code>"))
+		fail(fmt.Errorf("usage: qc zepto order <code>"))
 	}
 	code := strings.ToUpper(args[0])
 	c := client()
-	orders, err := c.Orders(50)
+	orders, err := c.Orders(0)
 	if err != nil {
 		fail(err)
 	}
 	for _, o := range orders {
-		if strings.EqualFold(o.Code, code) {
+		if strings.EqualFold(o.Code, code) || strings.EqualFold(o.ID, code) {
+			if jsonOutput {
+				json.NewEncoder(os.Stdout).Encode(map[string]any{"provider": activeProvider, "order": o, "currency": "INR", "amount_unit": "paise"})
+				return
+			}
 			fmt.Printf("Order %s\n", o.Code)
 			fmt.Printf("  Placed : %s\n", fmtDate(o.PlacedTime))
 			fmt.Printf("  Status : %s\n", o.FormattedStatus)
@@ -195,7 +316,7 @@ func cmdOrder(args []string) {
 			return
 		}
 	}
-	fail(fmt.Errorf("order %s not found in your recent orders", code))
+	fail(fmt.Errorf("order %s not found in your orders", code))
 }
 
 func cmdTrack(args []string) {
@@ -209,34 +330,41 @@ func cmdTrack(args []string) {
 		}
 	}
 	if code == "" {
-		fail(fmt.Errorf("usage: zepto track <code> [--watch]"))
+		fail(fmt.Errorf("usage: qc zepto track <code> [--watch]"))
 	}
 	c := client()
-	orders, err := c.Orders(50)
+	orders, err := c.Orders(0)
 	if err != nil {
 		fail(err)
 	}
 	var id string
 	for _, o := range orders {
-		if strings.EqualFold(o.Code, code) {
+		if strings.EqualFold(o.Code, code) || strings.EqualFold(o.ID, code) {
 			id = o.ID
 			break
 		}
 	}
 	if id == "" {
-		fail(fmt.Errorf("order %s not found in your recent orders", code))
+		fail(fmt.Errorf("order %s not found in your orders", code))
 	}
 	for {
 		t, err := c.Track(id)
 		if err != nil {
 			fail(err)
 		}
-		printTracking(t)
-		if !watch || isTerminal(t.Status) {
-			return
+		if jsonOutput {
+			json.NewEncoder(os.Stdout).Encode(map[string]any{"provider": activeProvider, "tracking": t, "currency": "INR", "amount_unit": "paise"})
+			if !watch || isTerminal(t.Status) {
+				return
+			}
+		} else {
+			printTracking(t)
+			if !watch || isTerminal(t.Status) {
+				return
+			}
+			fmt.Println("\n\033[2m— refreshing —\033[0m")
 		}
 		time.Sleep(20 * time.Second)
-		fmt.Println("\n\033[2m— refreshing —\033[0m")
 	}
 }
 
@@ -269,6 +397,10 @@ func cmdWallet() {
 	if err != nil {
 		fail(err)
 	}
+	if jsonOutput {
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"provider": activeProvider, "balance_paise": bal, "currency": "INR", "amount_unit": "paise"})
+		return
+	}
 	fmt.Printf("Wallet balance: %s\n", rupees(bal))
 }
 
@@ -277,12 +409,8 @@ func cmdWhoami() {
 	if err != nil {
 		fail(err)
 	}
-	fmt.Printf("session file : %s\n", configPath())
-	fmt.Printf("device_id    : %s\n", s.DeviceID)
-	fmt.Printf("session_id   : %s\n", s.SessionID)
-	fmt.Printf("store_id     : %s\n", s.StoreID)
-	if s.Latitude != "" {
-		fmt.Printf("location     : %s, %s\n", s.Latitude, s.Longitude)
+	if err = printAuth(activeProvider, s, false); err != nil {
+		fail(err)
 	}
 }
 

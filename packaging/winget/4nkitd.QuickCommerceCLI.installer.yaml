@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: 4nkitd.QuickCommerceCLI
+PackageVersion: 0.2.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: qc.exe
+    PortableCommandAlias: qc
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/4nkitd/quick-commerce-cli/releases/download/v0.2.0/qc_v0.2.0_windows_amd64.zip
+    InstallerSha256: 5D9FE0477BF55EAFC69846E2765967D983FC2E0959B616E37033C446CB4BBADE
+  - Architecture: arm64
+    InstallerUrl: https://github.com/4nkitd/quick-commerce-cli/releases/download/v0.2.0/qc_v0.2.0_windows_arm64.zip
+    InstallerSha256: C643772788BA5B4CA73A608D8EBECB63A2A72CA9E35F4AE5CA8599EC411626F3
+ManifestType: installer
+ManifestVersion: 1.6.0

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: 4nkitd.QuickCommerceCLI
+PackageVersion: 0.2.0
+PackageLocale: en-US
+Publisher: 4nkitd
+PublisherUrl: https://github.com/4nkitd
+PackageName: Quick Commerce CLI
+PackageUrl: https://github.com/4nkitd/quick-commerce-cli
+License: MIT
+ShortDescription: Fast CLI for Zepto and Blinkit — OTP auth, live search, price comparison, and spend analytics.
+Moniker: qc
+Tags:
+  - cli
+  - zepto
+  - blinkit
+  - quick-commerce
+  - golang
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0
