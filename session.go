@@ -30,10 +30,14 @@ func configPath() string {
 }
 
 func providerConfigPath(provider Provider) string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		dir, _ = os.UserHomeDir()
-		dir = filepath.Join(dir, ".config")
+	dir := os.Getenv("QC_CONFIG_DIR")
+	if dir == "" {
+		var err error
+		dir, err = os.UserConfigDir()
+		if err != nil {
+			dir, _ = os.UserHomeDir()
+			dir = filepath.Join(dir, ".config")
+		}
 	}
 	if provider == Zepto {
 		return filepath.Join(dir, "zepto", "session.json")

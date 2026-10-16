@@ -2,6 +2,7 @@
 /qc
 /dist
 SPENDING-REPORT.md
+SPENDING-REPORT-*.md
 /profile
 /tmp
 *.har
